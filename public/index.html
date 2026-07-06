@@ -23932,6 +23932,7 @@ function runLoginGuideParticles(done) {
   loginGuideRaf = requestAnimationFrame(draw);
 }
 function maybeRunStartupLoginGuide(source) {
+  if (source !== 'manual') return;
   if (startupLoginGuideShown || loginGuideAnimating) return;
   if (visualGuideActive) return;
   if (document.body.classList.contains('splash-active')) return;
@@ -25531,7 +25532,10 @@ var splashSoundPlayed = false;
 var splashAudioCtx = null;
 var splashSoundFallbackArmed = false;
 var splashTimer = null;
-var reduceSplashMotion = false;
+var splashAutoDismissTimer = null;
+var reduceSplashMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+var splashDesktopMac = /Macintosh|Mac OS X/.test(navigator.userAgent || '');
+if (splashDesktopMac) reduceSplashMotion = true;
 var splashReadyToEnter = false;
 
 function splashClamp01(v) { return Math.max(0, Math.min(1, v)); }
@@ -25738,7 +25742,7 @@ function drawMineradioSplashWebgl(elapsed) {
     splashCtx = splashCanvas.getContext('2d');
   }
   function resize() {
-    splashPixelRatio = Math.min(1.6, Math.max(1, window.devicePixelRatio || 1));
+    splashPixelRatio = reduceSplashMotion ? 1 : Math.min(1.25, Math.max(1, window.devicePixelRatio || 1));
     splashW = window.innerWidth;
     splashH = window.innerHeight;
     splashCanvas.width = Math.max(1, Math.floor(splashW * splashPixelRatio));
@@ -25748,7 +25752,7 @@ function drawMineradioSplashWebgl(elapsed) {
     splashDust = [];
     splashStreaks = [];
     splashShards = [];
-    var count = reduceSplashMotion ? 28 : 84;
+    var count = reduceSplashMotion ? 16 : 56;
     for (var i = 0; i < count; i++) {
       splashDust.push({
         x: Math.random() * splashW,
@@ -25766,7 +25770,7 @@ function drawMineradioSplashWebgl(elapsed) {
       'rgba(255,83,103,',
       'rgba(157,184,207,'
     ];
-    var streakCount = reduceSplashMotion ? 6 : 22;
+    var streakCount = reduceSplashMotion ? 3 : 12;
     for (var s = 0; s < streakCount; s++) {
       splashStreaks.push({
         x: Math.random() * splashW,
@@ -25781,7 +25785,7 @@ function drawMineradioSplashWebgl(elapsed) {
         alpha: 0.18 + Math.random() * 0.36
       });
     }
-    var shardCount = reduceSplashMotion ? 10 : 34;
+    var shardCount = reduceSplashMotion ? 5 : 18;
     for (var h = 0; h < shardCount; h++) {
       splashShards.push({
         ox: (Math.random() - 0.5) * splashW * 0.92,
@@ -26056,6 +26060,7 @@ function dismissSplash() {
   if (!s || s.classList.contains('hide') || s.classList.contains('exiting')) return;
   markAppPerf('splash-dismiss');
   if (splashTimer) { clearTimeout(splashTimer); splashTimer = null; }
+  if (splashAutoDismissTimer) { clearTimeout(splashAutoDismissTimer); splashAutoDismissTimer = null; }
   splashReadyToEnter = false;
   s.classList.remove('ready');
   if (typeof shouldUseIdleWallpaperPreview === 'function'
@@ -26108,6 +26113,9 @@ function markSplashReadyToEnter() {
   s.setAttribute('role', 'button');
   s.setAttribute('tabindex', '0');
   s.setAttribute('aria-label', '点击进入 Mineradio');
+  splashAutoDismissTimer = setTimeout(function(){
+    if (splashReadyToEnter) dismissSplash();
+  }, reduceSplashMotion ? 360 : 900);
 }
 
 document.addEventListener('DOMContentLoaded', function(){
@@ -26130,7 +26138,7 @@ document.addEventListener('DOMContentLoaded', function(){
   });
   if (reduceSplashMotion) {
     s.classList.add('reduce-motion');
-    splashTimer = setTimeout(markSplashReadyToEnter, 900);
+    splashTimer = setTimeout(markSplashReadyToEnter, 700);
     return;
   }
   playMineradioIntroSound();
