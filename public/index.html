@@ -14992,6 +14992,38 @@ renderer.domElement.addEventListener('contextmenu', function(e){
 //   stage 模式: 鼠标 y > 60% 屏幕高
 //   shift + wheel: 强制滚卡片
 var wheelOverShelf = false;
+var shelfWheelState = {
+  accum: 0,
+  lastStepAt: 0,
+  lastDir: 0
+};
+function normalizedShelfWheelDelta(e) {
+  var delta = Number(e && e.deltaY) || 0;
+  if (e && e.deltaMode === 1) delta *= 18;
+  else if (e && e.deltaMode === 2) delta *= Math.max(240, innerHeight * 0.72);
+  return delta;
+}
+function consumeShelfWheelStep(e) {
+  var delta = normalizedShelfWheelDelta(e);
+  if (!isFinite(delta) || Math.abs(delta) < 1.5) return 0;
+  var dir = delta > 0 ? 1 : -1;
+  var now = performance.now();
+  if (dir !== shelfWheelState.lastDir) {
+    shelfWheelState.accum = 0;
+    shelfWheelState.lastDir = dir;
+  }
+  shelfWheelState.accum += Math.abs(delta);
+  var threshold = 96;
+  var cooldown = 145;
+  if (now - shelfWheelState.lastStepAt < cooldown) {
+    shelfWheelState.accum = Math.min(shelfWheelState.accum, threshold * 1.25);
+    return 0;
+  }
+  if (shelfWheelState.accum < threshold) return 0;
+  shelfWheelState.accum = 0;
+  shelfWheelState.lastStepAt = now;
+  return dir;
+}
 renderer.domElement.addEventListener('wheel', function(e){
   if (isPointerOverUi(e)) return;
   if (!shelfManager || shelfManager.getMode() === 'off') return;
@@ -15006,7 +15038,8 @@ renderer.domElement.addEventListener('wheel', function(e){
       var panelScreenHit = !rowHit && !panelHit && cl.screenContainsPanel ? cl.screenContainsPanel(e.clientX, e.clientY) : false;
       if (!rowHit && !panelHit && !panelScreenHit) return;
       e.preventDefault(); e.stopImmediatePropagation();
-      cl.scrollBy(e.deltaY > 0 ? 1 : -1);
+      var contentStep = consumeShelfWheelStep(e);
+      if (contentStep) cl.scrollBy(contentStep);
       return;
     }
   }
@@ -15025,7 +15058,8 @@ renderer.domElement.addEventListener('wheel', function(e){
   if (inShelfArea) {
     e.preventDefault();
     e.stopImmediatePropagation();
-    shelfManager.scrollBy(e.deltaY > 0 ? 1 : -1);
+    var shelfStep = consumeShelfWheelStep(e);
+    if (shelfStep) shelfManager.scrollBy(shelfStep);
   }
 }, { passive: false, capture: true });
 
