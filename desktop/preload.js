@@ -44,6 +44,12 @@ contextBridge.exposeInMainWorld('desktopWindow', {
     ipcRenderer.on('desktop-window-state', listener);
     return () => ipcRenderer.removeListener('desktop-window-state', listener);
   },
+  onFullscreenTransition: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = (_event, payload) => callback(payload || {});
+    ipcRenderer.on('desktop-window-fullscreen-transition', listener);
+    return () => ipcRenderer.removeListener('desktop-window-fullscreen-transition', listener);
+  },
 });
 
 window.addEventListener('DOMContentLoaded', () => {

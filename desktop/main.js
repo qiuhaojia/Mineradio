@@ -21,6 +21,7 @@ let wallpaperWindow = null;
 let wallpaperState = {};
 let htmlFullscreenActive = false;
 let windowFullscreenActive = false;
+let fullscreenRestoreBounds = null;
 let mainWindowStateTimer = null;
 const registeredGlobalHotkeys = new Map();
 
@@ -132,6 +133,14 @@ function sendWindowState(win) {
   win.webContents.send('desktop-window-state', getWindowState(win));
 }
 
+function sendFullscreenTransition(win, entering) {
+  if (!win || win.isDestroyed()) return;
+  win.webContents.send('desktop-window-fullscreen-transition', {
+    entering: !!entering,
+    durationMs: process.platform === 'darwin' ? 180 : 760,
+  });
+}
+
 function sendGlobalHotkeyAction(action) {
   if (!mainWindow || mainWindow.isDestroyed() || !action) return;
   mainWindow.webContents.send('mineradio-global-hotkey', { action });
@@ -232,9 +241,13 @@ function getDisplayState(win) {
 }
 
 function getWindowState(win) {
+  const isSimpleFullScreen = !!(win && !win.isDestroyed() && process.platform === 'darwin' && typeof win.isSimpleFullScreen === 'function' && win.isSimpleFullScreen());
+  const isKioskFullScreen = !!(win && !win.isDestroyed() && typeof win.isKiosk === 'function' && win.isKiosk());
   if (!win || win.isDestroyed()) return {
     isMaximized: false,
     isNativeFullScreen: false,
+    isSimpleFullScreen: false,
+    isKioskFullScreen: false,
     isHtmlFullScreen: false,
     isWindowFullScreen: false,
     isFullScreen: false,
@@ -249,9 +262,11 @@ function getWindowState(win) {
   return {
     isMaximized: win.isMaximized(),
     isNativeFullScreen: win.isFullScreen(),
+    isSimpleFullScreen,
+    isKioskFullScreen,
     isHtmlFullScreen: htmlFullscreenActive,
     isWindowFullScreen: windowFullscreenActive,
-    isFullScreen: win.isFullScreen() || htmlFullscreenActive || windowFullscreenActive,
+    isFullScreen: win.isFullScreen() || isSimpleFullScreen || isKioskFullScreen || htmlFullscreenActive || windowFullscreenActive,
     isMinimized: win.isMinimized(),
     isVisible: win.isVisible(),
     isFocused: win.isFocused(),
@@ -665,15 +680,60 @@ function getWindowedBounds(win) {
 
 function applyWindowedBounds(win) {
   if (!win || win.isDestroyed()) return;
+  if (typeof win.isKiosk === 'function' && win.isKiosk()) {
+    win.setKiosk(false);
+  }
+  if (process.platform === 'darwin' && typeof win.isSimpleFullScreen === 'function' && win.isSimpleFullScreen()) {
+    win.setSimpleFullScreen(false);
+  }
   if (win.isMaximized()) win.unmaximize();
   win.setMinimumSize(MIN_WINDOWED_WIDTH, MIN_WINDOWED_HEIGHT);
-  win.setBounds(getWindowedBounds(win), false);
+  const restoreBounds = fullscreenRestoreBounds;
+  fullscreenRestoreBounds = null;
+  win.setBounds(restoreBounds || getWindowedBounds(win), false);
+  sendWindowState(win);
+}
+
+function getInstantFullscreenBounds(win) {
+  const display = screen.getDisplayMatching(win.getBounds());
+  return display.bounds;
+}
+
+function enterInstantFullscreen(win) {
+  if (!win || win.isDestroyed()) return;
+  fullscreenRestoreBounds = win.getBounds();
+  windowFullscreenActive = true;
+  sendFullscreenTransition(win, true);
+  win.setMinimumSize(1, 1);
+  const bounds = getInstantFullscreenBounds(win);
+  if (process.platform === 'darwin' && typeof win.setKiosk === 'function') {
+    win.setKiosk(true);
+    win.setBounds(bounds, false);
+    sendWindowState(win);
+    return;
+  }
+  win.setFullScreen(true);
   sendWindowState(win);
 }
 
 function exitFullscreenToWindow(win) {
   if (!win || win.isDestroyed()) return;
   windowFullscreenActive = false;
+  sendFullscreenTransition(win, false);
+
+  if (typeof win.isKiosk === 'function' && win.isKiosk()) {
+    win.setKiosk(false);
+    setTimeout(() => applyWindowedBounds(win), 40);
+    sendWindowState(win);
+    return;
+  }
+
+  if (process.platform === 'darwin' && typeof win.isSimpleFullScreen === 'function' && win.isSimpleFullScreen()) {
+    win.setSimpleFullScreen(false);
+    setTimeout(() => applyWindowedBounds(win), 120);
+    sendWindowState(win);
+    return;
+  }
 
   if (!win.isFullScreen()) {
     applyWindowedBounds(win);
@@ -694,13 +754,13 @@ function exitFullscreenToWindow(win) {
 
 function toggleFullscreen(win) {
   if (!win || win.isDestroyed()) return;
-  if (win.isFullScreen() || windowFullscreenActive) {
+  const isSimpleFullScreen = process.platform === 'darwin' && typeof win.isSimpleFullScreen === 'function' && win.isSimpleFullScreen();
+  const isKioskFullScreen = typeof win.isKiosk === 'function' && win.isKiosk();
+  if (win.isFullScreen() || isSimpleFullScreen || isKioskFullScreen || windowFullscreenActive) {
     exitFullscreenToWindow(win);
     return;
   }
-  windowFullscreenActive = true;
-  win.setFullScreen(true);
-  sendWindowState(win);
+  enterInstantFullscreen(win);
 }
 
 function overlayUrl(page) {
@@ -1381,7 +1441,8 @@ async function createWindow() {
   });
 
   mainWindow.webContents.on('before-input-event', (event, input) => {
-    if (input.type === 'keyDown' && (input.key === 'Escape' || input.code === 'Escape') && mainWindow.isFullScreen()) {
+    const kioskActive = typeof mainWindow.isKiosk === 'function' && mainWindow.isKiosk();
+    if (input.type === 'keyDown' && (input.key === 'Escape' || input.code === 'Escape') && (mainWindow.isFullScreen() || kioskActive)) {
       event.preventDefault();
       exitFullscreenToWindow(mainWindow);
     }

@@ -3733,6 +3733,33 @@ var RENDER_INTERACTION_HUGE_FPS = 0;
 var RENDER_INTERACTION_HOLD_MS = 900;
 var renderInteractionBoostUntil = 0;
 var renderInteractionReason = '';
+var fullscreenTransitionRenderUntil = 0;
+var fullscreenTransitionPendingViewportRefresh = false;
+function isFullscreenTransitionActive(now) {
+  return (now || performance.now()) < fullscreenTransitionRenderUntil;
+}
+function markFullscreenTransitionRender(durationMs) {
+  var hold = Math.max(120, Math.min(1800, Number(durationMs) || 180));
+  fullscreenTransitionRenderUntil = Math.max(fullscreenTransitionRenderUntil, performance.now() + hold);
+  fullscreenTransitionPendingViewportRefresh = true;
+  document.body.classList.add('desktop-fullscreen-transitioning');
+  if (typeof renderer !== 'undefined' && renderer && typeof renderer.render === 'function') {
+    try { renderer.render(scene, camera); } catch (e) {}
+  }
+  setTimeout(function(){
+    if (performance.now() >= fullscreenTransitionRenderUntil) {
+      document.body.classList.remove('desktop-fullscreen-transitioning');
+      fullscreenTransitionPendingViewportRefresh = false;
+      prevTime = performance.now();
+      scheduleMainRendererViewportRefresh('fullscreen-transition-end');
+    }
+  }, hold + 60);
+}
+if (window.desktopWindow && typeof window.desktopWindow.onFullscreenTransition === 'function') {
+  window.desktopWindow.onFullscreenTransition(function(payload){
+    markFullscreenTransitionRender(payload && payload.durationMs);
+  });
+}
 function renderQualityProfile() {
   var quality = normalizePerformanceQuality(fx && fx.performanceQuality);
   if (quality === 'eco') return { cap: 0.95, min: 0.56, budget: 2400000 };
@@ -25161,9 +25188,19 @@ function refreshMainRendererViewport(reason) {
   }
 }
 function scheduleMainRendererViewportRefresh(reason) {
+  if (typeof isFullscreenTransitionActive === 'function' && isFullscreenTransitionActive()) {
+    fullscreenTransitionPendingViewportRefresh = true;
+    return;
+  }
   refreshMainRendererViewport(reason || 'sync');
   [48, 140, 320].forEach(function(delay){
-    setTimeout(function(){ refreshMainRendererViewport(reason || 'sync'); }, delay);
+    setTimeout(function(){
+      if (typeof isFullscreenTransitionActive === 'function' && isFullscreenTransitionActive()) {
+        fullscreenTransitionPendingViewportRefresh = true;
+        return;
+      }
+      refreshMainRendererViewport(reason || 'sync');
+    }, delay);
   });
 }
 window.addEventListener('resize', function(){
@@ -26628,6 +26665,15 @@ function sampleRenderPerf(now, dt) {
 function animate() {
   requestAnimationFrame(animate);
   var now = performance.now();
+  if (isFullscreenTransitionActive(now)) {
+    renderPerfState.mode = 'fullscreen-freeze';
+    renderPerfState.skipped += 1;
+    return;
+  } else if (fullscreenTransitionPendingViewportRefresh) {
+    fullscreenTransitionPendingViewportRefresh = false;
+    prevTime = now;
+    scheduleMainRendererViewportRefresh('fullscreen-transition-recover');
+  }
   if (shouldSkipAdaptiveRenderFrame(now)) return;
   var dt = Math.min((now - prevTime) / 1000, 0.05);
   prevTime = now;
